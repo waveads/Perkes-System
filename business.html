@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaveAds Perks — Business</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app-shell" style="max-width: 600px;">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo" id="logoSlot"></div>
+      <span class="brand-text">WaveAds Perks</span>
+    </div>
+  </div>
+
+  <div class="page-header">
+    <div class="card-row">
+      <div>
+        <h1 id="bizName">—</h1>
+        <p class="subtitle">Driver perk tracker</p>
+      </div>
+      <span class="week-tag mono" id="weekTag">—</span>
+    </div>
+  </div>
+
+  <div class="grid" id="statsGrid"></div>
+
+  <div id="currentWeekSection"></div>
+
+  <div class="section-header"><h2>History</h2></div>
+  <div id="historyList"><div class="loading"><div class="spinner"></div>Loading...</div></div>
+</div>
+
+<script src="config.js"></script>
+<script>
+document.getElementById('logoSlot').innerHTML = LOGO_SVG;
+
+const WEEK = getCurrentWeek();
+document.getElementById('weekTag').textContent = WEEK;
+
+const params = new URLSearchParams(location.search);
+const businessId = params.get('id');
+
+async function load() {
+  if (!businessId) {
+    document.getElementById('historyList').innerHTML = '<div class="empty-state"><h3>No business specified</h3><p>This link is missing the business ID.</p></div>';
+    document.getElementById('statsGrid').innerHTML = '';
+    return;
+  }
+
+  const res = await apiCall('getBusinessView', { businessId: businessId, week: WEEK });
+
+  if (!res.ok) {
+    document.getElementById('historyList').innerHTML = '<div class="empty-state"><h3>Could not load data</h3><p>' + escapeHtml(res.error || 'The page is not connected to the backend yet.') + '</p></div>';
+    document.getElementById('statsGrid').innerHTML = '';
+    return;
+  }
+
+  document.getElementById('bizName').textContent = res.business.name;
+  render(res.business, res.assignments, res.currentWeekAssignment);
+}
+
+function render(business, assignments, currentWeekAssignment) {
+  const redeemedTotal = assignments.filter(function(a) { return a.status === 'redeemed'; }).length;
+  const pendingTotal = assignments.filter(function(a) { return a.status === 'available'; }).length;
+
+  document.getElementById('statsGrid').innerHTML =
+    '<div class="stat-card"><div class="stat-label">Current perk</div><div class="stat-value" style="font-size:1rem;">' + escapeHtml(business.perk) + '</div></div>' +
+    '<div class="stat-card"><div class="stat-label">Total redeemed</div><div class="stat-value teal">' + redeemedTotal + '</div></div>' +
+    '<div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value amber">' + pendingTotal + '</div></div>';
+
+  const cwSection = document.getElementById('currentWeekSection');
+  if (currentWeekAssignment) {
+    const isRedeemed = currentWeekAssignment.status === 'redeemed';
+    cwSection.innerHTML =
+      '<div class="section-header"><h2>This week</h2></div>' +
+      '<div class="card">' +
+        '<div class="card-row">' +
+          '<div>' +
+            '<p class="card-title">' + escapeHtml(currentWeekAssignment.driverName) + '</p>' +
+            '<p class="card-sub">' + escapeHtml(business.perk) + '</p>' +
+          '</div>' +
+          '<span class="pill ' + (isRedeemed ? 'pill-redeemed' : 'pill-available') + '">' + (isRedeemed ? 'Redeemed' : 'Available') + '</span>' +
+        '</div>' +
+        (isRedeemed
+          ? '<p class="hint success">Redeemed ' + new Date(currentWeekAssignment.redeemedAt).toLocaleString() + '</p>'
+          : '<div style="margin-top:12px;"><button class="btn btn-primary" id="redeemBtn">Confirm redemption</button><p class="hint" id="redeemMsg"></p></div>') +
+      '</div>';
+
+    if (!isRedeemed) {
+      document.getElementById('redeemBtn').addEventListener('click', async function() {
+        const btn = document.getElementById('redeemBtn');
+        const msg = document.getElementById('redeemMsg');
+        btn.disabled = true;
+        btn.textContent = 'Confirming...';
+        const res = await apiCall('redeem', { id: currentWeekAssignment.id });
+        if (res.ok) {
+          load();
+        } else {
+          msg.textContent = res.error || 'Could not confirm. Try again.';
+          msg.className = 'hint error';
+          btn.disabled = false;
+          btn.textContent = 'Confirm redemption';
+        }
+      });
+    }
+  } else {
+    cwSection.innerHTML =
+      '<div class="section-header"><h2>This week</h2></div>' +
+      '<div class="empty-state"><h3>No perk assigned yet</h3><p>Your admin has not assigned a driver for this weeks perk yet.</p></div>';
+  }
+
+  const historyList = document.getElementById('historyList');
+  const past = assignments.filter(function(a) { return a.week !== WEEK; });
+  if (!past.length) {
+    historyList.innerHTML = '<div class="empty-state"><h3>No history yet</h3><p>Past weeks will appear here.</p></div>';
+    return;
+  }
+
+  historyList.innerHTML = past.map(function(a) {
+    const isRedeemed = a.status === 'redeemed';
+    return '' +
+      '<div class="card">' +
+        '<div class="card-row">' +
+          '<div>' +
+            '<p class="card-title" style="font-size:0.95rem">' + escapeHtml(a.driverName) + '</p>' +
+            '<p class="card-sub">' + escapeHtml(a.week) + '</p>' +
+          '</div>' +
+          '<span class="pill ' + (isRedeemed ? 'pill-redeemed' : 'pill-expired') + '">' + (isRedeemed ? 'Redeemed' : 'Expired') + '</span>' +
+        '</div>' +
+      '</div>';
+  }).join('');
+}
+
+load();
+</script>
+</body>
+</html>

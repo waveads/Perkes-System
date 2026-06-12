@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaveAds Perks — Admin</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app-shell">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo" id="logoSlot"></div>
+      <span class="brand-text">WaveAds Perks</span>
+    </div>
+    <div class="who">Admin <strong id="weekLabel">—</strong></div>
+  </div>
+
+  <div class="page-header">
+    <div class="card-row">
+      <div>
+        <h1>Weekly perks</h1>
+        <p class="subtitle">Assign each business's perk to a driver, track redemptions</p>
+      </div>
+      <span class="week-tag mono" id="weekTag">—</span>
+    </div>
+  </div>
+
+  <div class="grid" id="statsGrid"></div>
+
+  <div class="view-tabs">
+    <button class="active" data-tab="assign">Assign perks</button>
+    <button data-tab="manage">Businesses &amp; drivers</button>
+    <button data-tab="links">Share links</button>
+  </div>
+
+  <div id="content"><div class="loading"><div class="spinner"></div>Loading...</div></div>
+</div>
+
+<script src="config.js"></script>
+<script>
+document.getElementById('logoSlot').innerHTML = LOGO_SVG;
+
+let state = { businesses: [], drivers: [], assignments: [] };
+const WEEK = getCurrentWeek();
+document.getElementById('weekTag').textContent = WEEK;
+document.getElementById('weekLabel').textContent = '· through ' + weekEndLabel(WEEK);
+let activeTab = 'assign';
+
+async function load() {
+  const res = await apiCall('getState');
+  if (res.ok) {
+    state.businesses = res.businesses || [];
+    state.drivers = res.drivers || [];
+    state.assignments = res.assignments || [];
+  } else {
+    document.getElementById('content').innerHTML = `
+      <div class="empty-state">
+        <h3>Not connected yet</h3>
+        <p>This page needs to be connected to your Google Sheet backend.<br>
+        See README.md for the one-time setup (about 10 minutes).</p>
+      </div>`;
+    document.getElementById('statsGrid').innerHTML = '';
+    return;
+  }
+  render();
+}
+
+function weekAssignments() {
+  return state.assignments.filter(a => a.week === WEEK);
+}
+
+function businessById(id) { return state.businesses.find(b => b.id === id); }
+function driverById(id) { return state.drivers.find(d => d.id === id); }
+
+function statusLabel(a) {
+  if (a.status === 'redeemed') return { cls: 'pill-redeemed', label: 'Redeemed' };
+  return { cls: 'pill-available', label: 'Available' };
+}
+
+function render() {
+  const wa = weekAssignments();
+  const available = wa.filter(a => a.status === 'available').length;
+  const redeemed = wa.filter(a => a.status === 'redeemed').length;
+
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat-card"><div class="stat-label">Businesses</div><div class="stat-value">${state.businesses.length}</div></div>
+    <div class="stat-card"><div class="stat-label">Drivers</div><div class="stat-value">${state.drivers.length}</div></div>
+    <div class="stat-card"><div class="stat-label">Available this week</div><div class="stat-value teal">${available}</div></div>
+    <div class="stat-card"><div class="stat-label">Redeemed this week</div><div class="stat-value amber">${redeemed}</div></div>
+  `;
+
+  document.querySelectorAll('.view-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === activeTab));
+
+  const content = document.getElementById('content');
+  if (activeTab === 'assign') content.innerHTML = renderAssign();
+  else if (activeTab === 'manage') content.innerHTML = renderManage();
+  else content.innerHTML = renderLinks();
+
+  attachHandlers();
+}
+
+function renderAssign() {
+  const wa = weekAssignments();
+  const unassigned = state.businesses.filter(b => !wa.some(a => a.businessId === b.id));
+
+  let html = '';
+
+  if (unassigned.length) {
+    html += `<div class="section-header"><h2>Assign this week's perks</h2></div><div class="card">`;
+    unassigned.forEach(b => {
+      html += `
+        <div class="assign-row">
+          <div class="assign-info">
+            <p class="card-title" style="font-size:0.95rem">${escapeHtml(b.name)}</p>
+            <p class="card-sub">${escapeHtml(b.perk)} <span class="code-badge">${escapeHtml(b.code)}</span></p>
+          </div>
+          <select data-assign="${b.id}">
+            <option value="">Assign to...</option>
+            ${state.drivers.map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('')}
+          </select>
+        </div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `<div class="section-header"><h2>This week's assignments</h2></div>`;
+
+  if (!wa.length) {
+    html += `<div class="empty-state"><h3>Nothing assigned yet</h3><p>Use the form above to assign each business's perk to a driver for week ${WEEK}.</p></div>`;
+  } else {
+    wa.forEach(a => {
+      const biz = businessById(a.businessId);
+      const drv = driverById(a.driverId);
+      const s = statusLabel(a);
+      html += `
+        <div class="card">
+          <div class="card-row">
+            <div>
+              <p class="card-title">${escapeHtml(biz ? biz.name : '?')} <span style="color:var(--text-soft); font-weight:400;">→ ${escapeHtml(drv ? drv.name : '?')}</span></p>
+              <p class="card-sub">${escapeHtml(biz ? biz.perk : '')}</p>
+              ${a.redeemedAt ? `<p class="card-sub">Redeemed ${new Date(a.redeemedAt).toLocaleString()}</p>` : ''}
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="pill ${s.cls}">${s.label}</span>
+              ${a.status === 'redeemed'
+                ? `<button class="btn btn-sm btn-ghost" data-unredeem="${a.id}">Undo</button>`
+                : `<button class="btn btn-sm btn-primary" data-redeem="${a.id}">Mark redeemed</button>`}
+              <button class="btn btn-sm btn-icon btn-ghost btn-danger" data-remove-assignment="${a.id}" aria-label="Remove assignment">✕</button>
+            </div>
+          </div>
+        </div>`;
+    });
+  }
+
+  return html;
+}
+
+function renderManage() {
+  let html = `<div class="section-header"><h2>Businesses</h2></div><div class="card">`;
+  state.businesses.forEach(b => {
+    html += `
+      <div class="assign-row" style="gap:8px;">
+        <div style="display:flex; gap:8px; flex:1; min-width:0;">
+          <input data-biz-name="${b.id}" value="${escapeHtml(b.name)}" placeholder="Business name" style="flex:1.4">
+          <input data-biz-code="${b.id}" value="${escapeHtml(b.code)}" placeholder="Code" class="mono" style="width:80px">
+          <input data-biz-perk="${b.id}" value="${escapeHtml(b.perk)}" placeholder="Weekly perk" style="flex:1.6">
+        </div>
+        <button class="btn btn-sm btn-icon btn-ghost btn-danger" data-remove-biz="${b.id}" aria-label="Remove business">✕</button>
+      </div>`;
+  });
+  html += `
+    <div style="margin-top:12px; display:flex; gap:8px;">
+      <button class="btn btn-sm" data-add-biz>+ Add business</button>
+      <button class="btn btn-sm btn-primary" data-save-biz>Save changes</button>
+    </div>
+    <p class="hint" id="bizMsg"></p>
+  </div>`;
+
+  html += `<div class="section-header"><h2>Drivers</h2></div><div class="card">`;
+  state.drivers.forEach(d => {
+    html += `
+      <div class="assign-row" style="gap:8px;">
+        <input data-drv-name="${d.id}" value="${escapeHtml(d.name)}" placeholder="Driver name" style="flex:1;">
+        <button class="btn btn-sm btn-icon btn-ghost btn-danger" data-remove-drv="${d.id}" aria-label="Remove driver">✕</button>
+      </div>`;
+  });
+  html += `
+    <div style="margin-top:12px; display:flex; gap:8px;">
+      <button class="btn btn-sm" data-add-drv>+ Add driver</button>
+      <button class="btn btn-sm btn-primary" data-save-drv>Save changes</button>
+    </div>
+    <p class="hint" id="drvMsg"></p>
+  </div>`;
+
+  return html;
+}
+
+function renderLinks() {
+  const base = location.origin + location.pathname.replace(/admin\.html$/, '');
+
+  let html = `<div class="section-header"><h2>Driver pages</h2></div>
+    <div class="card">
+      <p class="hint" style="margin-bottom:14px;">Send each driver their link once. It always shows their current perks and status — no need to resend after updates.</p>`;
+  state.drivers.forEach(d => {
+    const url = `${base}driver.html?id=${d.id}`;
+    html += `
+      <div class="assign-row" style="gap:8px;">
+        <span style="min-width:90px; flex-shrink:0;">${escapeHtml(d.name)}</span>
+        <span class="code-badge" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(url)}</span>
+        <button class="btn btn-sm" data-copy="${escapeHtml(url)}">Copy</button>
+      </div>`;
+  });
+  html += `</div>`;
+
+  html += `<div class="section-header"><h2>Business pages</h2></div>
+    <div class="card">
+      <p class="hint" style="margin-bottom:14px;">Send each business their link once. It shows their redemption history — and a button staff can click to confirm a redemption.</p>`;
+  state.businesses.forEach(b => {
+    const url = `${base}business.html?id=${b.id}`;
+    html += `
+      <div class="assign-row" style="gap:8px;">
+        <span style="min-width:130px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(b.name)}</span>
+        <span class="code-badge" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(url)}</span>
+        <button class="btn btn-sm" data-copy="${escapeHtml(url)}">Copy</button>
+      </div>`;
+  });
+  html += `</div>`;
+
+  return html;
+}
+
+function attachHandlers() {
+  document.querySelectorAll('.view-tabs button').forEach(b => {
+    b.addEventListener('click', () => { activeTab = b.dataset.tab; render(); });
+  });
+
+  document.querySelectorAll('[data-assign]').forEach(sel => {
+    sel.addEventListener('change', async (e) => {
+      const driverId = e.target.value;
+      if (!driverId) return;
+      const businessId = e.target.dataset.assign;
+      e.target.disabled = true;
+      const res = await apiCall('assignPerk', { week: WEEK, businessId, driverId });
+      if (res.ok) {
+        state.assignments.push({ id: res.id, week: WEEK, businessId, driverId, status: 'available', createdAt: new Date().toISOString(), redeemedAt: '' });
+        render();
+      } else {
+        alert(res.error || 'Could not assign perk.');
+        e.target.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-redeem]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.redeem;
+      btn.disabled = true;
+      const res = await apiCall('redeem', { id });
+      if (res.ok) {
+        const a = state.assignments.find(x => x.id === id);
+        if (a) { a.status = 'redeemed'; a.redeemedAt = new Date().toISOString(); }
+        render();
+      } else btn.disabled = false;
+    });
+  });
+
+  document.querySelectorAll('[data-unredeem]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.unredeem;
+      btn.disabled = true;
+      const res = await apiCall('unredeem', { id });
+      if (res.ok) {
+        const a = state.assignments.find(x => x.id === id);
+        if (a) { a.status = 'available'; a.redeemedAt = ''; }
+        render();
+      } else btn.disabled = false;
+    });
+  });
+
+  document.querySelectorAll('[data-remove-assignment]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.removeAssignment;
+      if (!confirm('Remove this assignment?')) return;
+      const res = await apiCall('removeAssignment', { id });
+      if (res.ok) {
+        state.assignments = state.assignments.filter(x => x.id !== id);
+        render();
+      }
+    });
+  });
+
+  const addBiz = document.querySelector('[data-add-biz]');
+  if (addBiz) addBiz.addEventListener('click', async () => {
+    const res = await apiCall('addBusiness', { name: 'New business', code: '0000', perk: 'Perk description' });
+    if (res.ok) {
+      state.businesses.push({ id: res.id, name: 'New business', code: '0000', perk: 'Perk description', active: true });
+      render();
+    }
+  });
+
+  const addDrv = document.querySelector('[data-add-drv]');
+  if (addDrv) addDrv.addEventListener('click', async () => {
+    const res = await apiCall('addDriver', { name: 'New driver' });
+    if (res.ok) {
+      state.drivers.push({ id: res.id, name: 'New driver', active: true });
+      render();
+    }
+  });
+
+  document.querySelectorAll('[data-remove-biz]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.removeBiz;
+      if (!confirm('Remove this business? This also removes its assignments.')) return;
+      const res = await apiCall('removeBusiness', { id });
+      if (res.ok) {
+        state.businesses = state.businesses.filter(b => b.id !== id);
+        state.assignments = state.assignments.filter(a => a.businessId !== id);
+        render();
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-remove-drv]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.removeDrv;
+      if (!confirm('Remove this driver? This also removes their assignments.')) return;
+      const res = await apiCall('removeDriver', { id });
+      if (res.ok) {
+        state.drivers = state.drivers.filter(d => d.id !== id);
+        state.assignments = state.assignments.filter(a => a.driverId !== id);
+        render();
+      }
+    });
+  });
+
+  const saveBiz = document.querySelector('[data-save-biz]');
+  if (saveBiz) saveBiz.addEventListener('click', async () => {
+    const msg = document.getElementById('bizMsg');
+    msg.textContent = 'Saving...';
+    msg.className = 'hint';
+    let ok = true;
+    for (const b of state.businesses) {
+      const name = document.querySelector(`[data-biz-name="${b.id}"]`).value;
+      const code = document.querySelector(`[data-biz-code="${b.id}"]`).value;
+      const perk = document.querySelector(`[data-biz-perk="${b.id}"]`).value;
+      const res = await apiCall('updateBusiness', { id: b.id, name, code, perk });
+      if (res.ok) { b.name = name; b.code = code; b.perk = perk; } else ok = false;
+    }
+    msg.textContent = ok ? 'Saved.' : 'Some changes failed to save.';
+    msg.className = ok ? 'hint success' : 'hint error';
+    render();
+  });
+
+  const saveDrv = document.querySelector('[data-save-drv]');
+  if (saveDrv) saveDrv.addEventListener('click', async () => {
+    const msg = document.getElementById('drvMsg');
+    msg.textContent = 'Saving...';
+    msg.className = 'hint';
+    let ok = true;
+    for (const d of state.drivers) {
+      const name = document.querySelector(`[data-drv-name="${d.id}"]`).value;
+      const res = await apiCall('updateDriver', { id: d.id, name });
+      if (res.ok) d.name = name; else ok = false;
+    }
+    msg.textContent = ok ? 'Saved.' : 'Some changes failed to save.';
+    msg.className = ok ? 'hint success' : 'hint error';
+    render();
+  });
+
+  document.querySelectorAll('[data-copy]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(btn.dataset.copy).catch(() => {});
+      const original = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = original; }, 1200);
+    });
+  });
+}
+
+load();
+</script>
+</body>
+</html>
