@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaveAds Perks — Driver</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app-shell" style="max-width: 600px;">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo" id="logoSlot"></div>
+      <span class="brand-text">WaveAds Perks</span>
+    </div>
+  </div>
+
+  <div class="page-header">
+    <div class="card-row">
+      <div>
+        <h1 id="driverName">—</h1>
+        <p class="subtitle">Your perks this week</p>
+      </div>
+      <span class="week-tag mono" id="weekTag">—</span>
+    </div>
+  </div>
+
+  <div id="content"><div class="loading"><div class="spinner"></div>Loading...</div></div>
+</div>
+
+<script src="config.js"></script>
+<script>
+document.getElementById('logoSlot').innerHTML = LOGO_SVG;
+
+const WEEK = getCurrentWeek();
+document.getElementById('weekTag').textContent = WEEK;
+
+const params = new URLSearchParams(location.search);
+const driverId = params.get('id');
+
+async function load() {
+  if (!driverId) {
+    document.getElementById('content').innerHTML = '<div class="empty-state"><h3>No driver specified</h3><p>This link is missing the driver ID.</p></div>';
+    return;
+  }
+
+  const res = await apiCall('getDriverView', { driverId, week: WEEK });
+
+  if (!res.ok) {
+    document.getElementById('content').innerHTML = '<div class="empty-state"><h3>Could not load your perks</h3><p>' + escapeHtml(res.error || 'Not connected yet.') + '</p></div>';
+    return;
+  }
+
+  document.getElementById('driverName').textContent = res.driver.name;
+  render(res.assignments);
+}
+
+function render(assignments) {
+  const content = document.getElementById('content');
+
+  // Get expiry date set by admin (stored in localStorage with week key)
+  const EXPIRY_KEY = 'waveads_expiry_' + WEEK;
+  const expiryDate = localStorage.getItem(EXPIRY_KEY) || '';
+  const expiryLabel = expiryDate ? 'Valid through ' + formatDate(expiryDate) : '';
+
+  if (!assignments.length) {
+    content.innerHTML = '<div class="empty-state"><h3>No perks yet this week</h3><p>Check back soon — your admin assigns perks at the start of each week.</p></div>';
+    return;
+  }
+
+  content.innerHTML = assignments.map(function(a) {
+    const isRedeemed = a.status === 'redeemed';
+    return '' +
+      '<div class="card">' +
+        '<div class="card-row">' +
+          '<p class="card-title">' + escapeHtml(a.businessName) + '</p>' +
+          '<span class="pill ' + (isRedeemed ? 'pill-redeemed' : 'pill-available') + '">' + (isRedeemed ? 'Redeemed' : 'Available') + '</span>' +
+        '</div>' +
+        '<p class="card-desc">' + escapeHtml(a.perk) + '</p>' +
+        (expiryLabel ? '<p class="hint">' + escapeHtml(expiryLabel) + '. Show this screen to staff to redeem.</p>' : '<p class="hint">Show this screen to staff to redeem.</p>') +
+        (isRedeemed && a.redeemedAt ? '<p class="hint success">Redeemed ' + new Date(a.redeemedAt).toLocaleString() + '</p>' : '') +
+      '</div>';
+  }).join('');
+}
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
