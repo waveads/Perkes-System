@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaveAds Perks — Driver</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .month-nav { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
+  .month-nav h2 { margin:0; font-size:1.1rem; flex:1; text-align:center; }
+  .week-block { background:var(--surface); border:0.5px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:10px; }
+  .week-block-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; cursor:pointer; }
+  .week-block-header:hover { background:var(--surface-2); }
+  .week-block-body { padding:14px 16px; display:none; border-top:0.5px solid var(--border); }
+  .week-block-body.open { display:block; }
+  .current-week-marker { border-left:3px solid var(--teal); }
+</style>
+</head>
+<body>
+
+<div class="app-shell" style="max-width:600px;">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo" id="logoSlot"></div>
+      <span class="brand-text">WaveAds Perks</span>
+    </div>
+  </div>
+
+  <div class="page-header">
+    <div>
+      <h1 id="driverName">—</h1>
+      <p class="subtitle">Your weekly perks</p>
+    </div>
+  </div>
+
+  <div id="content"><div class="loading"><div class="spinner"></div>Loading...</div></div>
+</div>
+
+<script src="config.js"></script>
+<script>
+document.getElementById('logoSlot').innerHTML = LOGO_SVG;
+
+const params = new URLSearchParams(location.search);
+const driverId = params.get('id');
+
+let allAssignments = [];
+let driverName = '';
+let currentMonth = todayYearMonth();
+
+function todayYearMonth() {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;
+}
+
+function getWeekKey(date) {
+  const d = new Date(date);
+  const jan1 = new Date(d.getFullYear(), 0, 1);
+  const diff = (d - jan1) / 86400000;
+  const week = Math.ceil((diff + jan1.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${String(week).padStart(2,'0')}`;
+}
+
+function getCurrentWeek() { return getWeekKey(new Date()); }
+
+function weekBounds(weekKey) {
+  const m = weekKey.match(/(\d+)-W(\d+)/);
+  const year = parseInt(m[1]), week = parseInt(m[2]);
+  const jan1 = new Date(year, 0, 1);
+  const monday = new Date(jan1);
+  monday.setDate(jan1.getDate() + (week-1)*7 - jan1.getDay() + 1);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return { monday, sunday };
+}
+
+function fmtDate(d) {
+  return d.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+}
+
+function weeksInMonth(yearMonth) {
+  const [year, month] = yearMonth.split('-').map(Number);
+  const weeks = [], seen = new Set();
+  const days = new Date(year, month, 0).getDate();
+  for (let d = 1; d <= days; d++) {
+    const key = getWeekKey(new Date(year, month-1, d));
+    if (!seen.has(key)) { seen.add(key); weeks.push(key); }
+  }
+  return weeks;
+}
+
+function monthLabel(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m-1, 1).toLocaleDateString('en-US', { month:'long', year:'numeric' });
+}
+
+function prevMonth(ym) {
+  let [y, m] = ym.split('-').map(Number);
+  m--; if (m < 1) { m = 12; y--; }
+  return `${y}-${String(m).padStart(2,'0')}`;
+}
+function nextMonth(ym) {
+  let [y, m] = ym.split('-').map(Number);
+  m++; if (m > 12) { m = 1; y++; }
+  return `${y}-${String(m).padStart(2,'0')}`;
+}
+
+function getExpiry(weekKey) {
+  return localStorage.getItem('waveads_expiry_' + weekKey) || '';
+}
+
+async function load() {
+  if (!driverId) {
+    document.getElementById('content').innerHTML = '<div class="empty-state"><h3>No driver specified</h3><p>This link is missing the driver ID.</p></div>';
+    return;
+  }
+  const res = await apiCall('getDriverView', { driverId, week: '' });
+  if (!res.ok) {
+    document.getElementById('content').innerHTML = '<div class="empty-state"><h3>Could not load perks</h3><p>' + escapeHtml(res.error || 'Not connected.') + '</p></div>';
+    return;
+  }
+  driverName = res.driver.name;
+  document.getElementById('driverName').textContent = driverName;
+  allAssignments = res.assignments || [];
+  render();
+}
+
+function render() {
+  const CURRENT_WEEK = getCurrentWeek();
+  const weeks = weeksInMonth(currentMonth);
+
+  let html = `<div class="month-nav">
+    <button class="btn btn-sm btn-ghost" id="prevBtn">‹</button>
+    <h2>${monthLabel(currentMonth)}</h2>
+    <button class="btn btn-sm btn-ghost" id="nextBtn">›</button>
+  </div>`;
+
+  weeks.forEach(wk => {
+    const { monday, sunday } = weekBounds(wk);
+    const isCurrent = wk === CURRENT_WEEK;
+    const wa = allAssignments.filter(a => a.week === wk);
+    const expiry = getExpiry(wk);
+
+    const redeemed = wa.filter(a => a.status === 'redeemed').length;
+    const available = wa.filter(a => a.status === 'available').length;
+
+    html += `<div class="week-block${isCurrent ? ' current-week-marker' : ''}">
+      <div class="week-block-header" data-toggle="${wk}">
+        <div>
+          <div style="font-weight:700; font-size:0.9rem;">${isCurrent ? '★ This week' : wk} <span style="font-weight:400; color:var(--text-soft); font-size:0.8rem;">${fmtDate(monday)} – ${fmtDate(sunday)}</span></div>
+          <div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;">
+            ${wa.length === 0 ? '<span style="font-size:0.75rem; color:var(--text-dim);">No perks assigned</span>' : ''}
+            ${available > 0 ? `<span class="pill pill-available" style="font-size:0.65rem; padding:2px 8px;">${available} available</span>` : ''}
+            ${redeemed > 0 ? `<span class="pill pill-redeemed" style="font-size:0.65rem; padding:2px 8px;">${redeemed} redeemed</span>` : ''}
+          </div>
+        </div>
+        <span style="color:var(--text-dim);" id="chev-${wk}">${isCurrent ? '▾' : '▸'}</span>
+      </div>
+      <div class="week-block-body${isCurrent ? ' open' : ''}" id="body-${wk}">`;
+
+    if (!wa.length) {
+      html += `<p style="color:var(--text-soft); font-size:0.88rem; margin:0;">No perks assigned for this week.</p>`;
+    } else {
+      if (expiry) html += `<p class="hint" style="margin-bottom:12px;">Valid through ${formatDate(expiry)}</p>`;
+      wa.forEach(a => {
+        const isRedeemed = a.status === 'redeemed';
+        html += `<div class="card" style="margin-bottom:10px;">
+          <div class="card-row">
+            <p class="card-title">${escapeHtml(a.businessName)}</p>
+            <span class="pill ${isRedeemed ? 'pill-redeemed' : 'pill-available'}">${isRedeemed ? 'Redeemed' : 'Available'}</span>
+          </div>
+          <p class="card-desc">${escapeHtml(a.perk)}</p>
+          ${isRedeemed && a.redeemedAt ? `<p class="hint success">Redeemed ${new Date(a.redeemedAt).toLocaleString()}</p>` : ''}
+          ${!isRedeemed ? '<p class="hint">Show this screen to staff to redeem.</p>' : ''}
+        </div>`;
+      });
+    }
+
+    html += `</div></div>`;
+  });
+
+  document.getElementById('content').innerHTML = html;
+
+  document.getElementById('prevBtn').addEventListener('click', () => { currentMonth = prevMonth(currentMonth); render(); });
+  document.getElementById('nextBtn').addEventListener('click', () => { currentMonth = nextMonth(currentMonth); render(); });
+
+  document.querySelectorAll('[data-toggle]').forEach(el => {
+    el.addEventListener('click', () => {
+      const wk = el.dataset.toggle;
+      const body = document.getElementById('body-' + wk);
+      const ch = document.getElementById('chev-' + wk);
+      ch.textContent = body.classList.toggle('open') ? '▾' : '▸';
+    });
+  });
+}
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
